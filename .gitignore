@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.idea/
+
+# les donnees ne vont pas dans git
+data/raw/
+data/cleaned/
+data/analytics/
+data/rejets/
+data/quality/
