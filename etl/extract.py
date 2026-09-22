@@ -40,6 +40,12 @@ def lire_toutes_les_sources(dossier_raw, echantillon=None):
 
     return sources
 
+def lire_cleaned(nom, dossier_cleaned, colonnes_dates=None):
+
+    dates = (colonnes_dates or {}).get(nom, [])
+    return pd.read_csv(dossier_cleaned / f"{nom}.csv",
+                       parse_dates=dates or None, encoding="utf-8")
+
 
 if __name__ == "__main__":
     import sys
