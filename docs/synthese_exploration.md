@@ -136,7 +136,6 @@ générera une dimension fantôme dans le schéma en étoile
 
 **point 4 — formats de dates hétérogènes et aucun fuseau horaire**
 
-
 `telemetrie.timestamp` compte 635 337 valeurs ISO et 3 valeurs dans trois formats
 distincts, et `equipements`, `maintenance` et `alarmes` contiennent chacun une date
 déviante au format `jj/mm/aaaa`, `jj-mm-aaaa` ou `jj/mm/aaaa hhHmm`
@@ -234,3 +233,297 @@ récupérable par recoupement plutôt que par imputation
 
 absente de toutes les sources, elle ne pourra être renseignée que par une hypothèse
 physique assumée, une orbite héliosynchrone à 600 km ayant une inclinaison d'environ 97,8°
+
+
+
+# 02 — chaîne ETL et qualité des données
+
+## architecture retenue
+
+trois zones séparées, chacune avec un rôle unique
+
+| zone | contenu | format | écrite par |
+|---|---|---|---|
+| `data/raw` | les 7 sources livrées, jamais modifiées | csv, json, sqlite | personne |
+| `data/cleaned` | une table par source, nettoyée et typée | csv | `run_etl.py` |
+| `data/analytics` | la table d'analyse, jointe et enrichie | csv | `run_etl.py` |
+| `data/rejets` | les lignes écartées avec leur motif | csv | `run_etl.py` |
+| `data/quality` | les indicateurs et les neutralisations | csv | `run_etl.py` |
+
+`raw` est en lecture seule, le nettoyage se fait en mémoire
+
+le code est séparé selon la question à laquelle il répond
+
+- `extract.py` lit, il ne juge rien
+- `transform.py` répond à « que vaut cette valeur », un DataFrame entre, un DataFrame sort
+- `quality.py` répond à « cette ligne a-t-elle le droit d'exister », il ne modifie aucune valeur
+- `run_etl.py` orchestre et connaît seul les chemins
+- `config.py` porte toute la règle, aucune constante métier n'est écrite dans le code
+
+la chaîne entière se régénère par une commande, `python -m etl.run_etl`, en 15 secondes
+
+## 1 — lecture et profilage
+
+`exploration.py` profile les 7 sources sans rien transformer, il rend pour chacune le volume,
+le type de chaque colonne, le taux de valeurs manquantes, les doublons de clé, les modalités
+observées, les masques de formats de dates et l'intégrité référentielle
+
+## 2 — harmonisation
+
+**noms de colonnes** — `normaliser_colonnes` met tout en minuscules et remplace tout
+caractère non alphanumérique par un souligné
+
+**types** — `convertir_numeriques` force les colonnes de mesure, une valeur non convertible
+devient NaN plutôt que de faire échouer la lecture
+
+**dates** — toutes les colonnes temporelles sont converties en `datetime64` avec fuseau UTC
+
+huit masques de formats distincts ont été observés dans les sources
+
+| source | format dominant | formats exotiques |
+|---|---|---|
+| telemetrie | `%Y-%m-%dT%H:%M:%S` sur 635 337 lignes | 3, dont un avec fractions de seconde et suffixe Z |
+| orbite | `%Y-%m-%d %H:%M:%S` sur 17 280 lignes | aucun |
+| alarmes | `%Y-%m-%d %H:%M:%S` sur 520 lignes | 1, séparateur d'heure en lettre, `19h46` |
+| maintenance | `%Y-%m-%d` sur 96 lignes | 1, `%d-%m-%Y` |
+| equipements | `%Y-%m-%d` sur 66 lignes | 1, `%d/%m/%Y` |
+
+`reparer_heures` normalise le `19h46` en `19:46` avant toute conversion
+
+`convertir_dates` applique le format dominant exactement sur toute la série, puis un repli
+sur la poignée de lignes restantes, la devinette ne porte donc jamais sur le gros du volume
+
+**hypothèse documentée** — aucune source ne porte d'indication de fuseau, tous les horodatages
+sont réputés être en UTC, cette convention est déclarée dans `config.FUSEAU` et non implicite
+
+## 3 — valeurs manquantes et aberrantes
+
+trois sorts possibles pour une donnée fautive, selon que l'identité de la ligne est atteinte
+
+| sort | quand | effet |
+|---|---|---|
+| correction | format de date exotique | la valeur est lue correctement |
+| neutralisation | valeur hors bornes physiques, modalité hors référentiel | la valeur devient NaN, **la ligne survit** |
+| rejet | clé nulle ou dupliquée, clé étrangère invalide, intervalle incohérent | la ligne sort avec un motif |
+
+le principe est qu'une valeur douteuse ne justifie pas de détruire les autres colonnes
+de la même ligne, on ne rejette que si la ligne ne peut plus être identifiée ou rattachée
+
+**230 valeurs neutralisées au total**, détaillées dans `data/quality/neutralisations.csv`
+
+| source | colonne | valeurs neutralisées |
+|---|---|---|
+| telemetrie | temperature_c | 120 |
+| telemetrie | puissance_w | 53 |
+| orbite | phase | 30 |
+| orbite | rayonnement_solaire_w_m2 | 20 |
+| equipements | puissance_nominale_w, type, statut | 1 chacune |
+| alarmes | severite, type_alarme | 1 chacune |
+| maintenance | cout_eur, type_intervention | 1 chacune |
+
+**une borne a dû être corrigée en cours de route** — la borne initiale sur `puissance_w`,
+fixée à −100 W, neutralisait 37 655 valeurs, soit 5,9 % de la mesure principale
+
+le croisement avec le type d'équipement a montré que ces 37 655 valeurs étaient
+**toutes des batteries, sans exception**, une batterie en décharge produit une puissance
+négative, ce qui est son fonctionnement normal et non une aberration
+
+la borne a été portée à −700 W, le plancher réel observé étant −600 W, et le nombre de
+neutralisations est tombé de 37 655 à 53, qui sont les vraies aberrations, dont 31 valeurs
+à exactement 1 000 000 W
+
+## 4 — doublons
+
+13 262 lignes écartées pour clé dupliquée, dont 13 260 en télémétrie
+
+la décomposition est exacte
+
+12 960 EQ-006 ingéré deux fois, 12 960 x 2 = 25 920 lignes pour un seul équipement
+300 lignes strictement identiques réparties sur les autres équipements
+= 622 080 lignes acceptées
+
+
+
+
+et 622 080 vaut exactement 48 équipements instrumentés x 12 960 horodatages,
+soit 45 jours x 288 pas de 5 minutes
+
+**après nettoyage, la télémétrie est exactement la grille théorique complète**, sans trou
+ni excédent, ce qui confirme qu'aucune donnée n'a été perdue en amont et que tout
+l'excédent brut était du doublon
+
+la règle de conservation est `keep="first"`, la première occurrence rencontrée est gardée
+
+## 5 — intégrité référentielle
+
+les référentiels sont traités avant les tables qui les référencent, dans l'ordre
+`sites`, `equipements`, `orbite`, `telemetrie`, `alarmes`, `maintenance`
+
+une clé étrangère est donc vérifiée contre les lignes **acceptées** du parent, jamais
+contre les lignes brutes, un équipement rejeté ne peut pas valider une mesure
+
+deux ruptures réelles trouvées et rejetées
+
+| source | valeur | cible manquante |
+|---|---|---|
+| equipements | `SITE-XXX` | `sites.site_id` |
+| maintenance | `EQ-XXX` | `equipements.equipement_id` |
+
+une clé étrangère **nulle** n'est pas traitée comme une clé étrangère invalide, la première
+est une absence, la seconde est une erreur, ce choix est réglable par source avec
+`fk_rejeter_nuls`, activé pour `maintenance` où une intervention sans équipement n'a aucun sens
+
+## 6 — fichier des rejets
+
+`data/rejets/rejets.csv`, 13 265 lignes, une par ligne écartée
+
+chaque ligne conserve toutes ses colonnes d'origine plus trois colonnes de traçabilité
+
+- `_source`, la table d'où elle vient
+- `_ligne_source`, sa position dans le fichier brut, pour la retrouver
+- `_motif_rejet`, un code issu de `config.py`, jamais du texte libre
+
+**une ligne rejetée porte un seul motif**, le premier contrôle qui l'attrape, les contrôles
+sont ordonnés de la cause vers le symptôme
+
+cet ordre n'est pas cosmétique, il détermine ce que le rapport qualité annonce, une date
+illisible rend la clé nulle, donc `DATE_ILLISIBLE` est testé avant `CLE_NULLE`, sinon le
+rapport annoncerait zéro date illisible alors que c'est la vraie cause
+
+les six motifs déclarés et les trois effectivement déclenchés
+
+| motif | lignes |
+|---|---|
+| `CLE_DUPLIQUEE` | 13 262 |
+| `FK_INVALIDE` | 2 |
+| `INTERVALLE_INVALIDE` | 1 |
+| `LIGNE_VIDE`, `CLE_NULLE`, `DATE_ILLISIBLE`, `DATE_HORS_PERIODE` | 0 |
+
+le cas `INTERVALLE_INVALIDE` est MAINT-000, dont la date de fin, 2025-04-28, précède
+sa date de début, 2025-05-01
+
+## 7 — indicateurs de qualité
+
+`data/quality/indicateurs_par_source.csv`
+
+| source | lues | acceptées | rejetées | doublons |
+|---|---|---|---|---|
+| sites | 4 | 4 | 0 | 0 |
+| equipements | 67 | 65 | 2 | 1 |
+| orbite | 17 280 | 17 280 | 0 | 0 |
+| telemetrie | 635 340 | 622 080 | 13 260 | 13 260 |
+| alarmes | 521 | 520 | 1 | 1 |
+| maintenance | 97 | 95 | 2 | 0 |
+| catalogue_modeles | 12 | 12 | 0 | 0 |
+| catalogue_seuils_alarmes | 6 | 6 | 0 | 0 |
+| catalogue_references_sites | 4 | 4 | 0 | 0 |
+| **total** | **653 331** | **640 066** | **13 265** | **13 262** |
+
+l'équation `lues = acceptées + rejetées` est vérifiée par un `assert` à chaque appel,
+une perte de ligne arrête la chaîne à l'endroit exact du problème au lieu de produire
+un chiffre faux trois étapes plus loin
+
+## point critique — distinguer l'éclipse de l'anomalie
+
+une puissance nulle en éclipse est normale, la confondre avec une panne fausserait
+toute la partie prédictive
+
+la télémétrie est au pas de 5 minutes par équipement, le contexte orbital au pas de
+15 minutes par site, et aucune colonne n'est commune aux deux tables
+
+`joindre_contexte_orbital` construit le pont en deux temps
+
+1. `telemetrie` vers `equipements` pour obtenir le `site_id`
+2. calage de l'horodatage sur la grille de 15 minutes avec `floor`, puis jointure sur
+   le couple créneau et site pour obtenir la `phase`
+
+le calage utilise `floor` et non `round`, un contexte orbital est valide **à partir** de
+son horodatage, une mesure de 00h07 appartient donc au créneau de 00h00 et non à celui
+de 00h15 qui n'avait pas encore commencé
+
+deux protections encadrent la jointure
+
+`drop_duplicates` sur la clé de droite, sans lequel les 25 940 mesures d'EQ-006, dupliqué
+dans `equipements`, auraient été doublées à leur tour, ce qui aurait ajouté 25 940 lignes
+silencieusement
+
+un `assert` sur le nombre de lignes, une jointure à gauche ne doit jamais changer le
+cardinal de la table de gauche
+
+**résultat du rattachement**
+
+| phase | lignes | puissance médiane |
+|---|---|---|
+| ensoleillement | 388 044 | 747,21 W |
+| eclipse | 232 956 | 0,00 W |
+| indetermine | 1 080 | — |
+
+taux de rattachement de 99,83 %, et l'écart entre 0 W et 747 W confirme que le signal
+orbital est net
+
+**les 1 080 lignes indéterminées** proviennent des 30 créneaux orbitaux dont la `phase`
+valait `inconnu` dans la source
+
+ces lignes reçoivent un troisième état explicite, `indetermine`, plutôt que NaN, parce
+qu'un test `phase == "eclipse"` sur une valeur manquante rend faux et ferait basculer
+ces mesures du côté « hors éclipse », donc du côté jugé anormal, une donnée qu'on ne
+sait pas qualifier n'est pas une donnée normale
+
+## zone analytics
+
+`data/analytics/mesures_enrichies.csv`, 622 080 lignes et 20 colonnes
+
+la table joint chaque mesure à son équipement, son site et son contexte orbital, puis
+ajoute quatre colonnes calculées
+
+| colonne | formule |
+|---|---|
+| `puissance_attendue_w` | `puissance_nominale_w` x `rayonnement` |
+| `performance` | `puissance_w` / `puissance_attendue_w` |
+| `ecart_w` | `puissance_w` moins `puissance_attendue_w` |
+| `hors_eclipse` | vrai si la phase vaut `ensoleillement` |
+
+**la formule ne s'applique qu'aux producteurs**, c'est-à-dire aux panneaux solaires
+
+la mesure de la puissance médiane en éclipse par type le justifie
+
+| type | médiane en éclipse |
+|---|---|
+| panneau_solaire | 0,00 W |
+| batterie | 249,14 W |
+| convertisseur_DC | 125,73 W |
+
+seul le panneau suit le soleil, une batterie continue de débiter en éclipse puisqu'elle
+se décharge, un convertisseur convertit ce qui lui arrive, appliquer la formule à l'un
+d'eux donnerait une performance infinie là où le rayonnement est nul
+
+le contrôle de cohérence de la formule est le ratio médian `reelle / (nominale x rayonnement)`
+mesuré à 1,068 sur les panneaux au soleil, une valeur proche de 1 confirme la définition
+
+la performance est donc calculable sur 274 388 mesures sur 622 080, les autres
+correspondent aux non-producteurs, aux phases d'éclipse et aux rayonnements nuls
+
+## limites connues
+
+**la jointure catalogue reste rompue**, 65 des 66 modèles de `equipements.csv` sont
+absents de `catalogue.modeles`, la famille de préfixes ne suffit pas à les rapprocher
+puisque quatre modèles de panneaux coexistent avec des puissances nominales différentes
+
+le blocage a été contourné et non résolu, `equipements.csv` porte sa propre colonne
+`puissance_nominale_w`, renseignée pour les 65 équipements acceptés, c'est elle qui sert
+de référence pour `puissance_attendue_w`
+
+**les bornes de plausibilité dépendent de la source et non du type d'équipement**, un
+panneau solaire à −400 W serait une vraie anomalie alors qu'une batterie à −400 W est
+normale, la borne actuelle est donc calibrée sur le cas le plus permissif
+
+**un type d'alarme sur six n'a aucun seuil** dans `catalogue.seuils_alarmes`, ni
+`seuil_warning`, ni `seuil_critical`, ni `unite`
+
+**437 alarmes sur 521 ont un message qui nomme un type différent de leur `type_alarme`**,
+aucune des deux colonnes n'a été déclarée prioritaire à ce stade
+
+**`config.py` porte un nom qui entre en collision avec un paquet public du même nom**,
+ce qui a provoqué des imports fantômes, le fichier gagnerait à s'appeler `parametres.py`
+
+
