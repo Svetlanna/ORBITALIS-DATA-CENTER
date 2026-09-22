@@ -105,7 +105,6 @@ if __name__ == "__main__":
     print("doublons de cle        :",
           int(marquer_doublons(df, ["timestamp", "equipement_id"]).sum()))
 
-
     # garde-fou : les dates doivent tomber dans la periode couverte
     hors = marquer_hors_periode(df["timestamp"], config.PERIODE_DEBUT, config.PERIODE_FIN)
     print("dates hors periode     :", int(hors.sum()))
