@@ -2,10 +2,11 @@
 __pycache__/
 *.pyc
 .idea/
-
+graphique/
 # les donnees ne vont pas dans git
 data/raw/
 data/cleaned/
 data/analytics/
 data/rejets/
 data/quality/
+model/
