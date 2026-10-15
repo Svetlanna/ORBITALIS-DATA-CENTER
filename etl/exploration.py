@@ -182,4 +182,4 @@ if __name__ == "__main__":
     integrite("telemetrie.equipement_id  -> equipements",       telemetrie["equipement_id"],  equipements["equipement_id"])
     integrite("alarmes.equipement_id     -> equipements",       alarmes["equipement_id"],     equipements["equipement_id"])
     integrite("maintenance.equipement_id -> equipements",       maintenance["equipement_id"], equipements["equipement_id"])
-    integrite("equipements.modele        -> catalogue.modeles", equipements["modele"],        catalogue["modeles"]["modele_id"])
+    integrite("equipements.modele        -> catalogue.model", equipements["modele"],        catalogue["model"]["modele_id"])
