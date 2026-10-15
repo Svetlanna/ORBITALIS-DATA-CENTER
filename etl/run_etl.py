@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pandas as pd
 
-# la racine doit etre sur le chemin AVANT tout import du projet
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config as C
@@ -20,7 +19,7 @@ from etl.transform import (construire_analytics, convertir_dates, convertir_nume
 # cle        colonnes qui identifient une ligne de facon unique et non nulle
 # dates      colonne -> format principal, le repli gere les formats exotiques
 # periode    True si les dates doivent tomber dans la periode couverte
-#            False pour les referentiels, une installation de 2024 est legitime
+#  false pour les referentiels, une installation de 2024 est legitime
 # numeriques colonnes a forcer en nombre
 # parent     (colonne enfant, source parente, colonne parente) pour l integrite referentielle
 
@@ -88,7 +87,7 @@ ORDRE = ["sites", "equipements", "orbite", "telemetrie", "alarmes", "maintenance
          "catalogue_modeles", "catalogue_seuils_alarmes", "catalogue_references_sites"]
 
 
-# ------------------------------------------------------------------ etapes
+# ------- etapes----
 
 def transformer(df, nom, regle):
     df = normaliser_colonnes(df)
@@ -191,7 +190,7 @@ def executer(dossier_raw=None, echantillon=None):
 
 
 if __name__ == "__main__":
-    print("chaine ETL, raw -> cleaned\n")
+    print("chaine ETL, raw_data -> cleaned\n")
     propres, indicateurs = executer()
     total = pd.DataFrame(indicateurs).sum(numeric_only=True)
     print(f"\n  TOTAL {int(total.lignes_lues)} lues = "

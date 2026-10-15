@@ -81,7 +81,7 @@ def appliquer_controles(df, controles, source):
         "detail_par_motif": detail,
     }
 
-    # equation d audit, aucune ligne ne doit disparaitre ni apparaitre
+    # equation d'audit, aucune ligne ne doit disparaitre ni apparaitre
     assert lues == len(acceptes) + len(rejetes), (
         f"{source} perte de lignes, {lues} lues mais "
         f"{len(acceptes)} acceptees + {len(rejetes)} rejetees"

@@ -75,20 +75,21 @@ def joindre_contexte_orbital(telemetrie, equipements, orbite, pas=PAS_ORBITAL):
 
     lignes_avant = len(telemetrie)
 
-    # 1. equipement vers site, drop_duplicates protege du doublon EQ-006
+
     equip = equipements[["equipement_id", "site_id"]].drop_duplicates("equipement_id")
     df = telemetrie.merge(equip, on="equipement_id", how="left")
 
-    # 2. calage sur la grille orbitale, floor et non round
+
+
     df["creneau_orbital"] = df["timestamp"].dt.floor(pas)
 
-    # 3. creneau et site vers phase
+
     contexte = (orbite[["timestamp", "site_id", "phase"]]
                 .rename(columns={"timestamp": "creneau_orbital"})
                 .drop_duplicates(["creneau_orbital", "site_id"]))
     df = df.merge(contexte, on=["creneau_orbital", "site_id"], how="left")
 
-    # 4. aucune phase ne reste manquante, l indetermine est un etat a part entiere
+
     df["phase"] = df["phase"].fillna(PHASE_INDETERMINEE)
 
     assert len(df) == lignes_avant, (
@@ -122,7 +123,8 @@ def joindre_contexte_orbital(telemetrie, equipements, orbite, pas=PAS_ORBITAL):
 
 
 def construire_analytics(telemetrie, equipements, sites, types_producteurs):
-    # ajoute deux indicateurs calcules
+
+    # deux indicateurs calcules
     # puissance_attendue_w = puissance nominale x rayonnement recu
     # performance          = puissance reelle / puissance attendue
     lignes_avant = len(telemetrie)
