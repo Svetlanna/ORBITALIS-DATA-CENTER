@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "fichier": "modele_risque_v1.joblib",
+  "nom": "regression_logistique",
+  "seuil": 0.5,
+  "cout_moyen_test": 221.9,
+  "recall_test": 0.991,
+  "mlflow_modele": "orbitalis_risque",
+  "mlflow_version": 5,
+  "active_par": "MLOPS.py",
+  "date_activation": "2026-10-20T11:53:24+00:00"
+}
